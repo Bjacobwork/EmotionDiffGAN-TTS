@@ -6,14 +6,14 @@ path:
     JLCorpus: "speech-datasets/en/JL corpus"
     LJSpeech: "speech-datasets/en/LJSpeech-1.1"
     VCTK: "speech-datasets/en/VCTK-Corpus-0.92"
-    EEmotion: "F:/Voice/EEmotion"
+    EEmotion: "speech-datasets/en/EEmotion"
   wav_tag: "mic1"
   wav_dir: "wav48_silence_trimmed"
   txt_dir: "txt"
 
   lexicon_path: "lexicon/librispeech-lexicon.txt"
-  raw_path: "F:/Voice/Combined/raw_data"
-  preprocessed_path: "F:/Voice/Combined/preprocessed_data"
+  raw_path: "./raw_data"
+  preprocessed_path: "./preprocessed_data"
 
 preprocessing:
   speaker_embedder: "DeepSpeaker" # support 'none', 'DeepSpeaker'
