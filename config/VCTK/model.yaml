@@ -38,7 +38,7 @@ variance_predictor:
   filter_size: 256
   predictor_grad: 0.1
   predictor_layers: 2
-  predictor_kernel: 5
+  predictor_kernel: 7
   cwt_hidden_size: 128
   cwt_std_scale: 0.8
   dur_predictor_layers: 2
@@ -54,7 +54,8 @@ variance_embedding:
 
 multi_speaker: True
 
-max_seq_len: 1200 # max sequence length of VCTK is 1126
+max_seq_len: 1200 # max sequence length of VCTK_naive is 1126
+emotion_features: 2
 
 vocoder:
   model: "HiFi-GAN" # support 'HiFi-GAN', 'MelGAN'

@@ -44,7 +44,7 @@ def evaluate(args, model, discriminator, step, configs, logger=None, vocoder=Non
                     # Forward
                     output, p_targets, coarse_mels = model(*(batch[2:]))
                     # Update Batch
-                    batch[9] = p_targets
+                    batch[10] = p_targets
 
                     (
                         fm_loss,
@@ -76,8 +76,8 @@ def evaluate(args, model, discriminator, step, configs, logger=None, vocoder=Non
                     x_ts, x_t_prevs, x_t_prev_preds, spk_emb, t = \
                         [x.detach() if x is not None else x for x in (list(xs) + [spk_emb, t])]
 
-                    D_real_cond, D_real_uncond = discriminator(x_ts, x_t_prevs, spk_emb, t)
-                    D_fake_cond, D_fake_uncond = discriminator(x_ts, x_t_prev_preds, spk_emb, t)
+                    D_real_cond, D_real_uncond = discriminator(batch[2], x_ts, x_t_prevs, spk_emb, t)
+                    D_fake_cond, D_fake_uncond = discriminator(batch[2], x_ts, x_t_prev_preds, spk_emb, t)
 
                     D_loss_real, D_loss_fake = Loss.d_loss_fn(D_real_cond[-1], D_real_uncond[-1], D_fake_cond[-1], D_fake_uncond[-1])
 
@@ -90,12 +90,12 @@ def evaluate(args, model, discriminator, step, configs, logger=None, vocoder=Non
                     # Forward
                     output, p_targets, coarse_mels = model(*(batch[2:]))
                     # Update Batch
-                    batch[9] = p_targets
+                    batch[10] = p_targets
 
                     (x_ts, x_t_prevs, x_t_prev_preds), spk_emb, t, mel_masks = *(output[1:4]), output[9]
 
-                    D_fake_cond, D_fake_uncond = discriminator(x_ts, x_t_prev_preds, spk_emb, t)
-                    D_real_cond, D_real_uncond = discriminator(x_ts, x_t_prevs, spk_emb, t)
+                    D_fake_cond, D_fake_uncond = discriminator(batch[2], x_ts, x_t_prev_preds, spk_emb, t)
+                    D_real_cond, D_real_uncond = discriminator(batch[2], x_ts, x_t_prevs, spk_emb, t)
 
                     adv_loss = Loss.g_loss_fn(D_fake_cond[-1], D_fake_uncond[-1])
 

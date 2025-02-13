@@ -1,6 +1,5 @@
 import argparse
 import os
-
 import torch
 import yaml
 import numpy as np
@@ -8,12 +7,10 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
-
 from utils.model import get_model, get_vocoder, get_param_num, get_netG_params, get_netD_params
 from utils.tools import get_configs_of, to_device, log, synth_one_sample
 from model import DiffGANTTSLoss
 from dataset import Dataset
-
 from evaluate import evaluate
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -40,8 +37,8 @@ def main(args, configs):
 
     # Prepare model
     model, discriminator, optG_fs2, optG, optD, sdlG, sdlD, epoch = get_model(args, configs, device, train=True)
-    model = nn.DataParallel(model)
-    discriminator = nn.DataParallel(discriminator)
+    model = nn.DataParallel(model, device_ids=[0])
+    discriminator = nn.DataParallel(discriminator, device_ids=[0])
     num_params_G = get_param_num(model)
     num_params_D = get_param_num(discriminator)
     Loss = DiffGANTTSLoss(args, preprocess_config, model_config, train_config).to(device)
@@ -71,6 +68,10 @@ def main(args, configs):
     save_step = train_config["step"]["save_step"]
     synth_step = train_config["step"]["synth_step"]
     val_step = train_config["step"]["val_step"]
+    lambda_fm = train_config["loss"]["lambda_fm" if args.model != "shallow" else "lambda_fm_shallow"]
+    lambda_adv = train_config["loss"]["lambda_adv"]
+    lambda_recon = train_config["loss"]["lambda_recon"]
+
     
     def model_update(model, step, loss, optimizer):
         # Backward
@@ -86,11 +87,12 @@ def main(args, configs):
     outer_bar = tqdm(total=total_step, desc="Training", position=0)
     outer_bar.n = args.restore_step
     outer_bar.update()
-
+    losses_msg = []
     while True:
         inner_bar = tqdm(total=len(loader), desc="Epoch {}".format(epoch), position=1)
         for batchs in loader:
             for batch in batchs:
+                torch.cuda.empty_cache()
                 batch = to_device(batch, device)
 
                 if args.model == "aux":
@@ -98,7 +100,7 @@ def main(args, configs):
                     # Forward
                     output, p_targets, coarse_mels = model(*(batch[2:]))
                     # Update Batch
-                    batch[9] = p_targets
+                    batch[10] = p_targets
 
                     (
                         fm_loss,
@@ -126,14 +128,14 @@ def main(args, configs):
                     #######################
 
                     # Forward
+                    context = batch[2]
                     output, *_ = model(*(batch[2:]))
-
                     xs, spk_emb, t, mel_masks = *(output[1:4]), output[9]
                     x_ts, x_t_prevs, x_t_prev_preds, spk_emb, t = \
                         [x.detach() if x is not None else x for x in (list(xs) + [spk_emb, t])]
 
-                    D_fake_cond, D_fake_uncond = discriminator(x_ts, x_t_prev_preds, spk_emb, t)
-                    D_real_cond, D_real_uncond = discriminator(x_ts, x_t_prevs, spk_emb, t)
+                    D_fake_cond, D_fake_uncond = discriminator(context, x_ts, x_t_prev_preds, spk_emb, t)
+                    D_real_cond, D_real_uncond = discriminator(context, x_ts, x_t_prevs, spk_emb, t)
 
                     D_loss_real, D_loss_fake = Loss.d_loss_fn(D_real_cond[-1], D_real_uncond[-1], D_fake_cond[-1], D_fake_uncond[-1])
 
@@ -148,12 +150,12 @@ def main(args, configs):
                     # Forward
                     output, p_targets, coarse_mels = model(*(batch[2:]))
                     # Update Batch
-                    batch[9] = p_targets
+                    batch[10] = p_targets
 
                     (x_ts, x_t_prevs, x_t_prev_preds), spk_emb, t, mel_masks = *(output[1:4]), output[9]
 
-                    D_fake_cond, D_fake_uncond = discriminator(x_ts, x_t_prev_preds, spk_emb, t)
-                    D_real_cond, D_real_uncond = discriminator(x_ts, x_t_prevs, spk_emb, t)
+                    D_fake_cond, D_fake_uncond = discriminator(context, x_ts, x_t_prev_preds, spk_emb, t)
+                    D_real_cond, D_real_uncond = discriminator(context, x_ts, x_t_prevs, spk_emb, t)
 
                     adv_loss = Loss.g_loss_fn(D_fake_cond[-1], D_fake_uncond[-1])
 
@@ -172,17 +174,20 @@ def main(args, configs):
                         (D_real_cond, D_real_uncond, D_fake_cond, D_fake_uncond),
                     )
 
-                    G_loss = adv_loss + recon_loss + fm_loss
+                    G_loss = lambda_adv*adv_loss + lambda_recon*recon_loss + lambda_fm*fm_loss
 
                     model_update(model, step, G_loss, optG)
 
                 losses = [D_loss + G_loss, D_loss, G_loss, recon_loss, fm_loss, adv_loss, mel_loss, pitch_loss, energy_loss, duration_loss]
-                losses_msg = [D_loss + G_loss, D_loss, adv_loss, mel_loss, pitch_loss, energy_loss, duration_loss]
+                losses_msg.append(
+                    [sum(l.values()).item() if isinstance(l, dict) else l.item() for l in
+                    [D_loss + G_loss, D_loss, adv_loss, mel_loss, pitch_loss, energy_loss, duration_loss]])
 
                 if step % log_step == 0:
-                    losses_msg = [sum(l.values()).item() if isinstance(l, dict) else l.item() for l in losses_msg]
+                    losses_msg = np.mean(np.array(losses_msg),axis=0,keepdims=False)
+
                     message1 = "Step {}/{}, ".format(step, total_step)
-                    message2 = "Total Loss: {:.4f}, D_loss: {:.4f}, adv_loss: {:.4f}, mel_loss: {:.4f}, pitch_loss: {:.4f}, energy_loss: {:.4f}, duration_loss: {:.4f}".format(
+                    message2 = "Total Loss: {:.4f}, D_loss: {:.4f}, adv_loss: {:.4f},\n mel_loss: {:.4f}, pitch_loss: {:.4f}, energy_loss: {:.4f}, duration_loss: {:.4f}".format(
                         *losses_msg
                     )
 
@@ -191,6 +196,8 @@ def main(args, configs):
 
                     outer_bar.write(message1 + message2)
                     log(train_logger, step, losses=losses, lr=sdlG.get_last_lr()[-1] if args.model != "aux" else optG_fs2.get_last_lr())
+
+                    losses_msg = []
 
                 if step % synth_step == 0:
                     figs, wav_reconstruction, wav_prediction, tag = synth_one_sample(
@@ -288,8 +295,8 @@ if __name__ == "__main__":
     # Read Config
     preprocess_config, model_config, train_config = get_configs_of(args.dataset)
     configs = (preprocess_config, model_config, train_config)
-    if args.model == "shallow":
-        assert args.restore_step >= train_config["step"]["total_step_aux"]
+    #if args.model == "shallow":
+    #    assert args.restore_step >= train_config["step"]["total_step_aux"]
     if args.model in ["aux", "shallow"]:
         train_tag = "shallow"
     elif args.model == "naive":

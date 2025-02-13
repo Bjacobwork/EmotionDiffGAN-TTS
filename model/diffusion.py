@@ -10,6 +10,7 @@ from functools import partial
 from inspect import isfunction
 
 from .modules import Denoiser
+#from .dense_denoiser import DenseDenoiser as Denoiser
 from utils.tools import get_noise_schedule_list
 
 

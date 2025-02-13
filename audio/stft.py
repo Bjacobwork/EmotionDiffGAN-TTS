@@ -170,7 +170,7 @@ class TacotronSTFT(torch.nn.Module):
         assert torch.max(y.data) <= 1
 
         magnitudes, phases = self.stft_fn.transform(y)
-        magnitudes = magnitudes.data
+        magnitudes = magnitudes.detach().cuda()
         mel_output = torch.matmul(self.mel_basis, magnitudes)
         mel_output = self.spectral_normalize(mel_output)
         energy = torch.norm(magnitudes, dim=1)

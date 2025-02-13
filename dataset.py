@@ -23,7 +23,8 @@ class Dataset(Dataset):
         self.batch_size = train_config["optimizer"]["batch_size" if self.model != "shallow" else "batch_size_shallow"]
         self.load_spker_embed = model_config["multi_speaker"] \
             and preprocess_config["preprocessing"]["speaker_embedder"] != 'none'
-
+        self.filter_speakers = None if not (self.load_spker_embed and 'filter_speakers' in train_config
+                                            and train_config['filter_speakers']) else train_config['filter_speakers']
         self.basename, self.speaker, self.text, self.raw_text = self.process_meta(
             filename
         )
@@ -87,6 +88,12 @@ class Dataset(Dataset):
             "{}-mel2ph-{}.npy".format(speaker, basename),
         )
         mel2ph = np.load(mel2ph_path)
+        emotion_path = os.path.join(
+            self.preprocessed_path,
+            "emotion",
+            f"{speaker}-emotion-{basename}.npy"
+        )
+        emotion = np.load(emotion_path)
         spker_embed = np.load(os.path.join(
             self.preprocessed_path,
             "spker_embed",
@@ -132,6 +139,7 @@ class Dataset(Dataset):
             "duration": duration,
             "mel2ph": mel2ph,
             "spker_embed": spker_embed,
+            "emotion": emotion
         }
 
         return sample
@@ -146,6 +154,8 @@ class Dataset(Dataset):
             raw_text = []
             for line in f.readlines():
                 n, s, t, r = line.strip("\n").split("|")
+                if self.filter_speakers and s not in self.filter_speakers:
+                    continue
                 name.append(n)
                 speaker.append(s)
                 text.append(t)
@@ -176,6 +186,7 @@ class Dataset(Dataset):
         mel2phs = [data[idx]["mel2ph"] for idx in idxs]
         spker_embeds = np.concatenate(np.array([data[idx]["spker_embed"] for idx in idxs]), axis=0) \
             if self.load_spker_embed else None
+        emotions = np.concatenate([np.expand_dims(data[idx]["emotion"],0) for idx in idxs], 0)
 
         text_lens = np.array([text.shape[0] for text in texts])
         mel_lens = np.array([mel.shape[0] for mel in mels])
@@ -189,14 +200,15 @@ class Dataset(Dataset):
         energies = pad_1D(energies)
         durations = pad_1D(durations)
         mel2phs = pad_1D(mel2phs)
+        max_text_lens = max(text_lens)
 
-        return (
-            ids,
+        return (ids,
             raw_texts,
+            emotions,
             speakers,
             texts,
             text_lens,
-            max(text_lens),
+            max_text_lens,
             mels,
             mel_lens,
             max(mel_lens),
@@ -240,7 +252,6 @@ class TextDataset(Dataset):
         self.preprocessed_path = preprocess_config["path"]["preprocessed_path"]
         self.load_spker_embed = model_config["multi_speaker"] \
             and preprocess_config["preprocessing"]["speaker_embedder"] != 'none'
-
         self.basename, self.speaker, self.text, self.raw_text = self.process_meta(
             filepath
         )
@@ -259,6 +270,7 @@ class TextDataset(Dataset):
         speaker = self.speaker[idx]
         speaker_id = self.speaker_map[speaker]
         raw_text = self.raw_text[idx]
+        emotion = np.load(f"{self.preprocessed_path}/emotion/{speaker}-emotion-{basename}.npy")
         phone = np.array(text_to_sequence(self.text[idx], self.cleaners))
         spker_embed = np.load(os.path.join(
             self.preprocessed_path,
@@ -266,7 +278,7 @@ class TextDataset(Dataset):
             "{}-spker_embed.npy".format(speaker),
         )) if self.load_spker_embed else None
 
-        return (basename, speaker_id, phone, raw_text, spker_embed)
+        return (basename, speaker_id, phone, raw_text, emotion, spker_embed)
 
     def process_meta(self, filename):
         with open(filename, "r", encoding="utf-8") as f:
@@ -288,9 +300,10 @@ class TextDataset(Dataset):
         texts = [d[2] for d in data]
         raw_texts = [d[3] for d in data]
         text_lens = np.array([text.shape[0] for text in texts])
-        spker_embeds = np.concatenate(np.array([d[4] for d in data]), axis=0) \
+        emotions = np.array([d[4] for d in data])
+        spker_embeds = np.concatenate(np.array([d[5] for d in data]), axis=0) \
             if self.load_spker_embed else None
 
         texts = pad_1D(texts)
 
-        return ids, raw_texts, speakers, texts, text_lens, max(text_lens), spker_embeds
+        return ids, raw_texts, emotions, speakers, texts, text_lens, max(text_lens), spker_embeds

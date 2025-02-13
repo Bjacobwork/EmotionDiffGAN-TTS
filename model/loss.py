@@ -55,7 +55,6 @@ class DiffGANTTSLoss(nn.Module):
         self.lambda_d = train_config["loss"]["lambda_d"]
         self.lambda_p = train_config["loss"]["lambda_p"]
         self.lambda_e = train_config["loss"]["lambda_e"]
-        self.lambda_fm = train_config["loss"]["lambda_fm" if self.model != "shallow" else "lambda_fm_shallow"]
         self.sil_ph_ids = sil_phonemes_ids()
         self.d_loss_fn, self.g_loss_fn = get_adversarial_losses_fn(train_config["loss"]["adv_loss_mode"])
 
@@ -72,7 +71,7 @@ class DiffGANTTSLoss(nn.Module):
             duration_targets,
             mel2phs,
             _,
-        ) = inputs[3:]
+        ) = inputs[4:]
         (
             mel_predictions,
             _,
@@ -110,19 +109,20 @@ class DiffGANTTSLoss(nn.Module):
             mel_loss = self.get_mel_loss(mel_predictions, mel_targets)
 
         duration_loss, pitch_loss, energy_loss = self.get_init_losses(mel_targets.device)
+        duration_loss = self.get_duration_loss(log_duration_predictions, duration_targets, texts)
+        if self.use_pitch_embed:
+            pitch_loss = self.get_pitch_loss(pitch_predictions, pitch_targets)
+        if self.use_energy_embed:
+            energy_loss = self.get_energy_loss(energy_predictions, energy_targets)
+        recon_loss = mel_loss
         if self.model != "shallow":
-            duration_loss = self.get_duration_loss(log_duration_predictions, duration_targets, texts)
-            if self.use_pitch_embed:
-                pitch_loss = self.get_pitch_loss(pitch_predictions, pitch_targets)
-            if self.use_energy_embed:
-                energy_loss = self.get_energy_loss(energy_predictions, energy_targets)
-        recon_loss = mel_loss + self.lambda_d * sum(duration_loss.values()) + \
+            recon_loss += self.lambda_d * sum(duration_loss.values()) + \
                         self.lambda_p * sum(pitch_loss.values()) + self.lambda_e * energy_loss
 
         # Feature matching loss
         fm_loss = torch.zeros(1).to(mel_targets.device)
         if Ds is not None:
-            fm_loss = self.lambda_fm * self.get_fm_loss(*Ds)
+            fm_loss = self.get_fm_loss(*Ds)
             # self.lambda_fm = recon_loss.item() / fm_loss.item() # dynamic scaling following (Yang et al., 2021)
 
         return (

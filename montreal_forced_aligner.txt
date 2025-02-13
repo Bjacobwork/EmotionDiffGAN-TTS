@@ -1,0 +1,8 @@
+conda config --add channels conda-forge
+conda install montreal-forced-aligner
+
+mfa model download dictionary english_us_arpa
+mfa model download acoustic english_us_arpa
+
+mfa validate --num_jobs 12 --use_mp --overwrite ~/mfa_data/raw_path english_us_arpa english_us_arpa
+mfa align --num_jobs 12 --use_mp  ~/mfa_data/raw_path english_us_arpa english_us_arpa ~/mfa_data/preprocessed_path/TextGrid

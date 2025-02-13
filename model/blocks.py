@@ -1,3 +1,5 @@
+import random
+
 import torch
 import torch.nn as nn
 import numpy as np
@@ -29,15 +31,17 @@ class SinusoidalPositionalEmbedding(nn.Module):
     Padding symbols are ignored.
     """
 
-    def __init__(self, embedding_dim, padding_idx, init_size=1024):
+    def __init__(self, embedding_dim, padding_idx, init_size=1024, random_padding=True):
         super().__init__()
         self.embedding_dim = embedding_dim
         self.padding_idx = padding_idx
+        self.init_size = init_size
         self.weights = SinusoidalPositionalEmbedding.get_embedding(
             init_size,
             embedding_dim,
             padding_idx,
         )
+        self.random_padding = random_padding
         self.register_buffer("_float_tensor", torch.FloatTensor(1))
 
     @staticmethod
@@ -77,7 +81,12 @@ class SinusoidalPositionalEmbedding(nn.Module):
             pos = timestep.view(-1)[0] + 1 if timestep is not None else seq_len
             return self.weights[self.padding_idx + pos, :].expand(bsz, 1, -1)
 
-        positions = make_positions(input, self.padding_idx) if positions is None else positions
+        if self.training:
+            padding_idx = random.randint(self.padding_idx, self.init_size-input.shape[-1]-1) if self.random_padding else self.padding_idx
+        else:
+            padding_idx = self.padding_idx
+        positions = make_positions(input, padding_idx) if positions is None else positions
+
         return self.weights.index_select(0, positions.view(-1)).view(bsz, seq_len, -1).detach()
 
     def max_positions(self):
@@ -119,8 +128,43 @@ class LinearNorm(nn.Module):
             nn.init.constant_(self.linear.bias, 0.0)
     
     def forward(self, x):
-        x = self.linear(x)
-        return x
+        return self.linear(x)
+
+
+class ConvNorm(nn.Module):
+    """ 1D Convolution """
+
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel_size=1,
+        stride=1,
+        padding=None,
+        dilation=1,
+        bias=True,
+        w_init_gain="linear",
+    ):
+        super(ConvNorm, self).__init__()
+
+        if padding is None:
+            padding = 'same'
+
+        self.conv = nn.Conv1d(
+            in_channels,
+            out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            dilation=dilation,
+            bias=bias,
+        )
+        nn.init.kaiming_normal_(self.conv.weight)
+
+    def forward(self, signal):
+        conv_signal = self.conv(signal)
+
+        return conv_signal
 
 
 class ConvBlock(nn.Module):
@@ -154,44 +198,6 @@ class ConvBlock(nn.Module):
             enc_output = enc_output.masked_fill(mask.unsqueeze(-1), 0)
 
         return enc_output
-
-
-class ConvNorm(nn.Module):
-    """ 1D Convolution """
-
-    def __init__(
-        self,
-        in_channels,
-        out_channels,
-        kernel_size=1,
-        stride=1,
-        padding=None,
-        dilation=1,
-        bias=True,
-        w_init_gain="linear",
-    ):
-        super(ConvNorm, self).__init__()
-
-        if padding is None:
-            assert kernel_size % 2 == 1
-            padding = int(dilation * (kernel_size - 1) / 2)
-
-        self.conv = nn.Conv1d(
-            in_channels,
-            out_channels,
-            kernel_size=kernel_size,
-            stride=stride,
-            padding=padding,
-            dilation=dilation,
-            bias=bias,
-        )
-        nn.init.kaiming_normal_(self.conv.weight)
-
-    def forward(self, signal):
-        conv_signal = self.conv(signal)
-
-        return conv_signal
-
 
 class MultiheadAttention(nn.Module):
     def __init__(self, embed_dim, num_heads, kdim=None, vdim=None, dropout=0., bias=True,
@@ -629,12 +635,12 @@ class DiffusionEmbedding(nn.Module):
     def __init__(self, d_denoiser):
         super(DiffusionEmbedding, self).__init__()
         self.dim = d_denoiser
+        self.half_dim = self.dim // 2
 
     def forward(self, x):
         device = x.device
-        half_dim = self.dim // 2
-        emb = math.log(10000) / (half_dim - 1)
-        emb = torch.exp(torch.arange(half_dim, device=device) * -emb)
+        emb = math.log(10000) / (self.half_dim - 1)
+        emb = torch.exp(torch.arange(self.half_dim, device=device) * -emb)
         emb = x[:, None] * emb[None, :]
         emb = torch.cat((emb.sin(), emb.cos()), dim=-1)
         return emb
@@ -646,12 +652,13 @@ class ResidualBlock(nn.Module):
     def __init__(self, d_encoder, residual_channels, dropout, multi_speaker=True):
         super(ResidualBlock, self).__init__()
         self.multi_speaker = multi_speaker
+        kernel_size = 3
         self.conv_layer = ConvNorm(
             residual_channels,
             2 * residual_channels,
-            kernel_size=3,
+            kernel_size=kernel_size,
             stride=1,
-            padding=int((3 - 1) / 2),
+            padding=int((kernel_size - 1) / 2),
             dilation=1,
         )
         self.diffusion_projection = LinearNorm(residual_channels, residual_channels)
@@ -672,15 +679,12 @@ class ResidualBlock(nn.Module):
             speaker_emb = self.speaker_projection(speaker_emb).unsqueeze(1).expand(
                 -1, conditioner.shape[-1], -1
             ).transpose(1, 2)
-
         residual = y = x + diffusion_step
         y = self.conv_layer(
             (y + conditioner + speaker_emb) if self.multi_speaker else (y + conditioner)
         )
         gate, filter = torch.chunk(y, 2, dim=1)
         y = torch.sigmoid(gate) * torch.tanh(filter)
-
         y = self.output_projection(y)
         x, skip = torch.chunk(y, 2, dim=1)
-
         return (x + residual) / math.sqrt(2.0), skip

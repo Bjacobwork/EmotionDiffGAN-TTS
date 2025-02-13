@@ -5,22 +5,23 @@ import torch
 import numpy as np
 
 import hifigan
-from model import DiffGANTTS, JCUDiscriminator, ScheduledOptim
-
+from model import EmotionDiffGANTTS, EmotionJCUDiscriminator, ScheduledOptim
 
 def get_model(args, configs, device, train=False):
     (preprocess_config, model_config, train_config) = configs
 
     epoch = 1
-    model = DiffGANTTS(args, preprocess_config, model_config, train_config).to(device)
-    discriminator = JCUDiscriminator(preprocess_config, model_config, train_config).to(device)
+    model = EmotionDiffGANTTS(args, preprocess_config, model_config, train_config).to(device)
+    discriminator = EmotionJCUDiscriminator(preprocess_config, model_config, train_config).to(device)
     if args.restore_step:
         ckpt_path = os.path.join(
             train_config["path"]["ckpt_path"],
             "{}.pth.tar".format(args.restore_step),
         )
+        print(os.path.exists(ckpt_path), ckpt_path)
         ckpt = torch.load(ckpt_path, map_location=device)
         epoch = int(ckpt["epoch"])
+
         model.load_state_dict(ckpt["G"]) # named_parameters: {'variance_adaptor', 'diffusion', 'mel_linear', 'text_encoder', 'decoder'}
         discriminator.load_state_dict(ckpt["D"]) # named_parameters: {'input_projection', 'cond_conv_block', 'uncond_conv_block', 'conv_block', 'mlp'}
 
@@ -38,6 +39,7 @@ def get_model(args, configs, device, train=False):
         sdlG = torch.optim.lr_scheduler.ExponentialLR(optG, gamma)
         sdlD = torch.optim.lr_scheduler.ExponentialLR(optD, gamma)
         if args.restore_step and args.restore_step != train_config["step"]["total_step_aux"]: # should be initialized when "shallow"
+            print("Loading optimizer state.")
             optG_fs2.load_state_dict(ckpt["optG_fs2"])
             optG.load_state_dict(ckpt["optG"])
             optD.load_state_dict(ckpt["optD"])
@@ -88,14 +90,19 @@ def get_vocoder(config, device):
         vocoder.mel2wav.eval()
         vocoder.mel2wav.to(device)
     elif name == "HiFi-GAN":
-        with open("hifigan/config.json", "r") as f:
+
+        if speaker == "LJSpeech":
+            config_path = "hifigan/config.json"
+            model_path = "hifigan/generator_LJSpeech.pth.tar"
+        elif speaker == "universal":
+            config_path = "hifigan/config.json"
+            model_path = "hifigan/generator_universal.pth.tar"
+
+        with open(config_path, "r") as f:
             config = json.load(f)
         config = hifigan.AttrDict(config)
         vocoder = hifigan.Generator(config)
-        if speaker == "LJSpeech":
-            ckpt = torch.load("hifigan/generator_LJSpeech.pth.tar", map_location=device)
-        elif speaker == "universal":
-            ckpt = torch.load("hifigan/generator_universal.pth.tar", map_location=device)
+        ckpt = torch.load(model_path, map_location=device)
         vocoder.load_state_dict(ckpt["generator"])
         vocoder.eval()
         vocoder.remove_weight_norm()
@@ -118,8 +125,8 @@ def vocoder_infer(mels, vocoder, model_config, preprocess_config, lengths=None):
     ).astype("int16")
     wavs = [wav for wav in wavs]
 
-    for i in range(len(mels)):
-        if lengths is not None:
+    if lengths is not None:
+        for i in range(len(mels)):
             wavs[i] = wavs[i][: lengths[i]]
 
     return wavs

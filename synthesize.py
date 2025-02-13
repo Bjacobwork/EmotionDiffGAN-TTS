@@ -90,8 +90,13 @@ def preprocess_english(text, preprocess_config):
 def synthesize(model, args, configs, vocoder, batchs, control_values):
     preprocess_config, model_config, train_config = configs
     pitch_control, energy_control, duration_control = control_values
-
+    model.eval()
     def synthesize_(batch):
+        if len(batch) == 9:
+            tag = f"_{batch[-1]}"
+            batch = batch[:-1]
+        else:
+            tag = ""
         batch = to_device(batch, device)
         with torch.no_grad():
             # Forward
@@ -111,13 +116,14 @@ def synthesize(model, args, configs, vocoder, batchs, control_values):
                 preprocess_config,
                 train_config["path"]["result_path"],
                 model.diffusion,
+                tag=tag
             )
 
     if args.teacher_forced:
         for batchs_ in batchs:
             for batch in tqdm(batchs_):
                 batch = list(batch)
-                batch[6] = None # set mel None for diffusion sampling
+                batch[7] = None # set mel None for diffusion sampling
                 synthesize_(batch)
     else:
         for batch in tqdm(batchs):
@@ -140,7 +146,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--mode",
         type=str,
-        choices=["batch", "single"],
+        choices=["batch", "single", "cycle"],
         required=True,
         help="Synthesize a whole dataset or a single sentence",
     )
@@ -155,6 +161,12 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="raw text to synthesize, for single-sentence mode only",
+    )
+    parser.add_argument(
+        "--emotion",
+        type=str,
+        default="neutral",
+        help="emotion key in emotions.npz"
     )
     parser.add_argument(
         "--speaker_id",
@@ -201,8 +213,8 @@ if __name__ == "__main__":
     # Read Config
     preprocess_config, model_config, train_config = get_configs_of(args.dataset)
     configs = (preprocess_config, model_config, train_config)
-    if args.model == "shallow":
-        assert args.restore_step >= train_config["step"]["total_step_aux"]
+    #if args.model == "shallow":
+    #    assert args.restore_step >= train_config["step"]["total_step_aux"]
     if args.model in ["aux", "shallow"]:
         train_tag = "shallow"
     elif args.model == "naive":
@@ -229,10 +241,14 @@ if __name__ == "__main__":
     print("================================================================================================")
 
     # Get model
-    model = get_model(args, configs, device, train=False)
+    model, discriminator, optG_fs2, optG, optD, sdlG, sdlD, epoch = get_model(args, configs, device, train=True)
+    #print(discriminator)
+    #model = get_model(args, configs, device, train=False)
+    #print(model)
 
     # Load vocoder
     vocoder = get_vocoder(model_config, device)
+    #print(vocoder)
 
     # Preprocess texts
     if args.mode == "batch":
@@ -248,12 +264,13 @@ if __name__ == "__main__":
             batch_size=8,
             collate_fn=dataset.collate_fn,
         )
-    if args.mode == "single":
+
+    def get_single_example(scale=1.
+                           ):
         ids = raw_texts = [args.text[:100]]
-        
         # Speaker Info
         load_spker_embed = model_config["multi_speaker"] \
-            and preprocess_config["preprocessing"]["speaker_embedder"] != 'none'
+                           and preprocess_config["preprocessing"]["speaker_embedder"] != 'none'
         with open(os.path.join(preprocess_config["path"]["preprocessed_path"], "speakers.json")) as f:
             speaker_map = json.load(f)
         speakers = np.array([speaker_map[args.speaker_id]]) if model_config["multi_speaker"] else np.array([0]) # single speaker is allocated 0
@@ -262,13 +279,39 @@ if __name__ == "__main__":
             "spker_embed",
             "{}-spker_embed.npy".format(args.speaker_id),
         )) if load_spker_embed else None
-
+        emotion = np.expand_dims(np.load(f"emotions.npz")[args.emotion], 0)*scale
         if preprocess_config["preprocessing"]["text"]["language"] == "en":
             texts = np.array([preprocess_english(args.text, preprocess_config)])
         elif preprocess_config["preprocessing"]["text"]["language"] == "zh":
             raise NotImplementedError
         text_lens = np.array([len(texts[0])])
-        batchs = [(ids, raw_texts, speakers, texts, text_lens, max(text_lens), spker_embed)]
+        return (ids, raw_texts, emotion, speakers, texts, text_lens, max(text_lens), spker_embed, args.emotion)
+
+    if args.mode == "single":
+        batches = [get_single_example()]
+
+    dataset_translation = {
+        'Alarmed': 'alarmed',
+        'Amused': 'amused',
+        'Anger': 'angry',
+        'Annoyed': 'annoyed',
+        'Astonished': 'astonished',
+        'At Ease': 'ease',
+        'Calm': 'calm',
+        'Content': 'content',
+        'Delighted': 'delighted',
+        'Depressed': 'depressed',
+        'Excited': 'excited',
+        'Happy': 'happy',
+        'Tired': 'tired',
+        "Neutral": 'neutral',
+    }
+
+    if args.mode == "cycle":
+        batchs = []
+        for emotion in dataset_translation.values():
+            args.emotion = emotion
+            batchs.append(get_single_example())
 
     control_values = args.pitch_control, args.energy_control, args.duration_control
 

@@ -34,10 +34,11 @@ def get_configs_of(dataset):
 
 
 def to_device(data, device):
-    if len(data) == 19:
+    if len(data) == 20:
         (
             ids,
             raw_texts,
+            emotions,
             speakers,
             texts,
             src_lens,
@@ -72,6 +73,7 @@ def to_device(data, device):
         durations = torch.from_numpy(durations).long().to(device)
         mel2phs = torch.from_numpy(mel2phs).long().to(device)
         spker_embeds = torch.from_numpy(spker_embeds).float().to(device) if spker_embeds is not None else spker_embeds
+        emotions = torch.from_numpy(emotions).float().to(device)
 
         pitch_data = {
             "pitch": pitches,
@@ -85,6 +87,7 @@ def to_device(data, device):
         return [
             ids,
             raw_texts,
+            emotions,
             speakers,
             texts,
             src_lens,
@@ -99,16 +102,16 @@ def to_device(data, device):
             spker_embeds,
         ]
 
-    if len(data) == 7:
-        (ids, raw_texts, speakers, texts, src_lens, max_src_len, spker_embeds) = data
-
+    if len(data) == 8:
+        (ids, raw_texts, emotions, speakers, texts, src_lens, max_src_len, spker_embeds) = data
+        emotions = torch.from_numpy(emotions).float().to(device)
         speakers = torch.from_numpy(speakers).long().to(device)
         texts = torch.from_numpy(texts).long().to(device)
         src_lens = torch.from_numpy(src_lens).to(device)
         if spker_embeds is not None:
             spker_embeds = torch.from_numpy(spker_embeds).float().to(device)
 
-        return (ids, raw_texts, speakers, texts, src_lens, max_src_len, spker_embeds)
+        return (ids, raw_texts, emotions, speakers, texts, src_lens, max_src_len, spker_embeds)
 
 
 def log(
@@ -163,7 +166,7 @@ def expand(values, durations):
 
 
 def synth_one_sample(args, targets, predictions, coarse_mels, vocoder, model_config, preprocess_config, diffusion):
-
+    context = targets[2]
     pitch_config = preprocess_config["preprocessing"]["pitch"]
     pitch_type = pitch_config["pitch_type"]
     use_pitch_embed = model_config["variance_embedding"]["use_pitch_embed"]
@@ -172,14 +175,14 @@ def synth_one_sample(args, targets, predictions, coarse_mels, vocoder, model_con
     basename = targets[0][0]
     src_len = predictions[10][0].item()
     mel_len = predictions[11][0].item()
-    mel_target = targets[6][0, :mel_len].float().detach().transpose(0, 1)
-    duration = targets[11][0, :src_len].int().detach().cpu().numpy()
+    mel_target = targets[7][0, :mel_len].float().detach().transpose(0, 1)
+    duration = targets[12][0, :src_len].int().detach().cpu().numpy()
     figs = {}
     if use_pitch_embed:
-        pitch_prediction, pitch_target = predictions[4], targets[9]
+        pitch_prediction, pitch_target = predictions[4], targets[10]
         f0 = pitch_target["f0"]
         if pitch_type == "ph":
-            mel2ph = targets[12]
+            mel2ph = targets[13]
             f0 = expand_f0_ph(f0, mel2ph, pitch_config)
             f0_pred = expand_f0_ph(pitch_prediction["pitch_pred"][:, :, 0], mel2ph, pitch_config)
             figs["f0"] = f0_to_figure(f0[0, :mel_len], None, f0_pred[0, :mel_len])
@@ -208,11 +211,11 @@ def synth_one_sample(args, targets, predictions, coarse_mels, vocoder, model_con
         if preprocess_config["preprocessing"]["energy"]["feature"] == "phoneme_level":
             energy_prediction = predictions[5][0, :src_len].detach().cpu().numpy()
             energy_prediction = expand(energy_prediction, duration)
-            energy_target = targets[10][0, :src_len].detach().cpu().numpy()
+            energy_target = targets[11][0, :src_len].detach().cpu().numpy()
             energy_target = expand(energy_target, duration)
         else:
             energy_prediction = predictions[5][0, :mel_len].detach().cpu().numpy()
-            energy_target = targets[10][0, :mel_len].detach().cpu().numpy()
+            energy_target = targets[11][0, :mel_len].detach().cpu().numpy()
         figs["energy"] = energy_to_figure(energy_target, energy_prediction)
 
     if args.model == "aux":
@@ -233,6 +236,12 @@ def synth_one_sample(args, targets, predictions, coarse_mels, vocoder, model_con
         titles = [f"T={t}" if t!=0 else f"T={t}" for t in range(0, timesteps+1)[::-1]] \
             + (["Coarse Spectrogram"] if args.model == "shallow" else []) + ["GT"]
         diffusion.aux_mel = None
+
+    mels.append(mels[-1]-mels[-2])
+    titles.append('diff')
+    r = lambda x: (torch.min(x), torch.max(x))
+    for i in range(-1,-4,-1):
+        print(i, r(mels[i]))
 
     figs["mel"] = plot_mel(mels, titles)
 
@@ -257,10 +266,12 @@ def synth_one_sample(args, targets, predictions, coarse_mels, vocoder, model_con
     return figs, wav_reconstruction, wav_prediction, basename
 
 
-def synth_samples(args, targets, predictions, vocoder, model_config, preprocess_config, path, diffusion):
+def synth_samples(args, targets, predictions, vocoder, model_config, preprocess_config, path, diffusion, tag=None):
 
     multi_speaker = model_config["multi_speaker"]
-    teacher_forced_tag = "_teacher_forced" if args.teacher_forced else ""
+    if not tag:
+        tag = ""
+    tag = f"{tag}_teacher_forced" if args.teacher_forced else tag
     basenames = targets[0]
     if args.model == "aux":
         # denormalizing x_0 is needed due to diffuse_trace
@@ -273,8 +284,8 @@ def synth_samples(args, targets, predictions, vocoder, model_config, preprocess_
         duration = predictions[7][i, :src_len].detach().cpu().numpy()
 
         fig_save_dir = os.path.join(
-            path, str(args.restore_step), "{}_{}{}.png".format(basename, args.speaker_id, teacher_forced_tag)\
-                if multi_speaker and args.mode == "single" else "{}{}.png".format(basename, teacher_forced_tag))
+            path, str(args.restore_step), "{}_{}{}.png".format(basename, args.speaker_id, tag)\
+                if multi_speaker and args.mode in ["single", "cycle"] else "{}{}.png".format(basename, tag))
         fig = plot_mel(
             [
                 mel_prediction.cpu().numpy(),
@@ -287,16 +298,17 @@ def synth_samples(args, targets, predictions, vocoder, model_config, preprocess_
     from .model import vocoder_infer
 
     mel_predictions = predictions[0].transpose(1, 2)
+    mel_lens = predictions[11]
     lengths = predictions[11] * preprocess_config["preprocessing"]["stft"]["hop_length"]
     wav_predictions = vocoder_infer(
         mel_predictions, vocoder, model_config, preprocess_config, lengths=lengths
     )
 
     sampling_rate = preprocess_config["preprocessing"]["audio"]["sampling_rate"]
-    for wav, basename in zip(wav_predictions, basenames):
+    for wav, basename, mel, ml, length in zip(wav_predictions, basenames, mel_predictions, mel_lens, lengths):
         wavfile.write(os.path.join(
-            path, str(args.restore_step), "{}_{}{}.wav".format(basename, args.speaker_id, teacher_forced_tag)\
-                if multi_speaker and args.mode == "single" else "{}{}.wav".format(basename, teacher_forced_tag)),
+            path, str(args.restore_step), "{}_{}{}.wav".format(basename, args.speaker_id, tag)\
+                if multi_speaker and args.mode in ["single", "cycle"] else "{}{}.wav".format(basename, tag)),
             sampling_rate, wav)
 
 
