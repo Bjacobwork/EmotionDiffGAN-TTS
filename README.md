@@ -13,7 +13,7 @@ This model builds upon [DiffGAN-TTS](https://arxiv.org/abs/2201.11972), adding e
 Emotional expression was accomplished by concatenating an emotion vector to both the Variance predictors within the generation model and the convolutional blocks of the discriminator.
 
 ## Emotion Vector Model
-Emotion vectors are predicted using Booberjacob/wav2vec2-lg-xlsr-en-speech-circumplex-emotion-recognition. Run the provided script after preprocessing.py.
+Emotion vectors are predicted using [Booberjacob/wav2vec2-lg-xlsr-en-speech-circumplex-emotion-recognition](https://huggingface.co/Booberjacob/wav2vec2-lg-xlsr-en-speech-circumplex-emotion-recognition). Run the provided script after preprocessing.py.
 
 	   python3 process_emotions.py --dataset DATASET
   
