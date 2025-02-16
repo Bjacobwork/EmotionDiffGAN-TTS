@@ -16,8 +16,10 @@ Emotional expression was accomplished by concatenating an emotion vector to both
 Emotion vectors are predicted using [Booberjacob/wav2vec2-lg-xlsr-en-speech-circumplex-emotion-recognition](https://huggingface.co/Booberjacob/wav2vec2-lg-xlsr-en-speech-circumplex-emotion-recognition). Run the provided script after preprocessing.py.
 
 	   python3 process_emotions.py --dataset DATASET
-  
- ## Datasets
+
+## Audio Samples
+[https://bjacobwork.github.io/EmoDiffGAN-TTS-Demo/](https://bjacobwork.github.io/EmoDiffGAN-TTS-Demo/)  
+ ## Datasets Used
  - [LJSpeech](https://keithito.com/LJ-Speech-Dataset/)
  - [VCTK](https://datashare.ed.ac.uk/handle/10283/3443)
  - [EEmotion](https://huggingface.co/datasets/Booberjacob/EEmotion)
@@ -31,6 +33,8 @@ The following losses are on the 'Combined' dataset.
 </p>
 
 ## Inference
+A pre-trained model is available [here](https://drive.google.com/drive/folders/1tUSs-xJnTCbet-GBh7XK_zygslbFUKwy?usp=sharing).
+
 Single emotion inference:
 
 	python3 synthesize.py --text "YOUR_DESIRED_TEXT" --model MODEL --speaker_id SPEAKER_ID --restore_step RESTORE_STEP --mode single --dataset DATASET --emotion EMOTION
