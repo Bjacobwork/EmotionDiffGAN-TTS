@@ -43,8 +43,3 @@ Multi-emotion inference:
 
  - [DiffGAN-TTS](https://github.com/keonlee9420/DiffGAN-TTS)
  - [Fastspeech2](https://arxiv.org/pdf/2006.04558)
-
-
-    DiffGAN-TTS
-    Fastspeech2
-
